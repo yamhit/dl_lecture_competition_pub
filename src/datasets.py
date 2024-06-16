@@ -1,22 +1,30 @@
 import math
+import random
 from pathlib import Path, PurePath
 from typing import Dict, Tuple
 from time import time
+
 import cv2
 import hdf5plugin
 import h5py
 from numba import jit
 import numpy as np
 import os
+
 import imageio
 imageio.plugins.freeimage.download()
 import imageio.v3 as iio
+
 import torch
 import torch.utils.data
 from torchvision.transforms import RandomCrop
 from torchvision import transforms as tf
 from torch.utils.data import Dataset
 
+from scipy.ndimage import rotate
+from scipy import ndimage
+
+import torchvision
 
 from src.utils import RepresentationType, VoxelGrid, flow_16bit_to_float
 
@@ -361,6 +369,35 @@ class Sequence(Dataset):
 
     def __getitem__(self, idx):
         sample = self.get_data(idx)
+
+        # データ拡張手法の適用
+        if self.mode == 'train':
+            event_volume = sample['event_volume']
+
+            # ランダムな回転
+            if random.random() < 0.5:
+                angle = random.uniform(-10, 10)
+                event_volume = torch.from_numpy(rotate(event_volume.numpy(), angle, reshape=False))
+
+            # ランダムな反転
+            if random.random() < 0.5:
+                event_volume = torch.flip(event_volume, [2])
+
+            # ランダムなクロップ
+            if random.random() < 0.5:
+                crop_size = (int(event_volume.shape[1] * 0.9), int(event_volume.shape[2] * 0.9))
+                event_volume = torchvision.transforms.functional.center_crop(event_volume, crop_size)
+
+            # リサイズ
+            event_volume = torchvision.transforms.functional.resize(event_volume, (self.height, self.width))
+
+            sample['event_volume'] = event_volume
+
+        # ノイズ除去のための前処理
+        event_volume = sample['event_volume']
+        event_volume = torch.from_numpy(ndimage.median_filter(event_volume.numpy(), size=(1, 3, 3)))
+        sample['event_volume'] = event_volume
+
         return sample
 
     def get_voxel_grid(self, idx):
